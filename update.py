@@ -16,7 +16,10 @@ OUT       = os.path.join(os.path.dirname(__file__), "data.json")
 def api(path):
     req = urllib.request.Request(BASE + path, headers={"x-apisports-key": API_KEY})
     with urllib.request.urlopen(req, timeout=30) as r:
-        return json.load(r)["response"]
+        payload = json.load(r)
+    if payload.get("errors"):
+        print(f"!! API errors on {path.split('?')[0]}: {payload['errors']}")
+    return payload.get("response", [])
 
 def team_rates(tid, cache):
     if str(tid) in cache: return cache[str(tid)]
@@ -55,7 +58,15 @@ def player_pool(tid, cache):
 def build_live():
     cache={}
     if os.path.exists("cache.json"): cache=json.load(open("cache.json"))
-    fx=api(f"/fixtures?league={LEAGUE_ID}&season={SEASON}&next=20")
+    # fetch upcoming fixtures by explicit UTC date (robust to timezone + param quirks)
+    fx=[]
+    base=datetime.datetime.now(datetime.timezone.utc).date()
+    for k in range(4):
+        dt=(base+datetime.timedelta(days=k)).isoformat()
+        chunk=api(f"/fixtures?league={LEAGUE_ID}&season={SEASON}&date={dt}")
+        print(f"   {dt}: {len(chunk)} fixtures")
+        fx+=chunk
+    print(f"   total raw fixtures: {len(fx)}")
     out=[]
     for f in fx:
         h,a=f["teams"]["home"],f["teams"]["away"]; ko=f["fixture"]["date"]
