@@ -1,50 +1,53 @@
 #!/usr/bin/env python3
 """
-agent.py — the AI layer. It does NOT compute any probability.
+agent.py — the AI layer (OpenAI Responses API + web search).
 
-Given two teams and their squads, it uses an LLM (with web search) to read the
-latest team news and return, as strict JSON:
-  - projected starters and their projected minutes for each side
-  - any players ruled out
-  - a one-line note
+It does NOT compute any probability. Given two teams, it uses GPT-5.5 with the
+hosted web_search tool to read the latest team news and return, as strict JSON,
+each side's projected starters + minutes and anyone ruled out. model.py turns
+those minutes into player-prop probabilities.
 
-model.py turns those minutes into player-prop probabilities. The LLM's job is
-judgment about availability and roles, nothing more.
-
-No ANTHROPIC_API_KEY set -> returns a transparent mock projection so the rest of
-the pipeline runs end to end.
+No OPENAI_API_KEY set -> returns a transparent mock projection so the rest of
+the pipeline still runs end to end.
 """
 import os, json, urllib.request
 
-KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-URL = "https://api.anthropic.com/v1/messages"
+KEY   = os.environ.get("OPENAI_API_KEY", "").strip()
+MODEL = os.environ.get("OPENAI_MODEL", "gpt-5.5")   # swap to "gpt-5" if you prefer
+URL   = "https://api.openai.com/v1/responses"
 
-SYSTEM = (
+INSTRUCTIONS = (
   "You assist a sports STATISTICAL model. You never estimate odds or probabilities. "
   "Use web search to find the latest confirmed or projected lineup and injury news "
-  "for the match. Return ONLY strict JSON, no prose, in this exact shape:\n"
+  "for the match. Return ONLY strict JSON, no prose, no code fences, in this exact shape:\n"
   '{"home":{"starters":[{"name":str,"min":int}],"out":[str]},'
   '"away":{"starters":[{"name":str,"min":int}],"out":[str]},"note":str}\n'
   "min is projected minutes (90 for a likely full start, less for rotation risk, "
-  "0 only if you would not list them). Keep note under 20 words."
+  "omit a player rather than list 0). Keep note under 20 words."
 )
 
 def _call_llm(home, away, kickoff):
     body = json.dumps({
-        "model": "claude-sonnet-4-6",
-        "max_tokens": 1500,
-        "system": SYSTEM,
-        "tools": [{"type": "web_search_20250305", "name": "web_search"}],
-        "messages": [{"role": "user",
-            "content": f"Match: {home} vs {away}, kickoff {kickoff}. "
-                       f"Project both starting XIs with minutes and list anyone ruled out."}],
+        "model": MODEL,
+        "instructions": INSTRUCTIONS,
+        "tools": [{"type": "web_search"}],
+        "tool_choice": "auto",
+        "reasoning": {"effort": "low"},
+        "input": f"Match: {home} vs {away}, kickoff {kickoff}. "
+                 f"Project both starting XIs with minutes and list anyone ruled out.",
     }).encode()
     req = urllib.request.Request(URL, data=body, headers={
-        "x-api-key": KEY, "anthropic-version": "2023-06-01",
-        "content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=60) as r:
+        "Authorization": f"Bearer {KEY}",
+        "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=90) as r:
         data = json.load(r)
-    text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+    # Responses API: pull text out of the typed output array
+    text = ""
+    for item in data.get("output", []):
+        if item.get("type") == "message":
+            for c in item.get("content", []):
+                if c.get("type") == "output_text":
+                    text += c.get("text", "")
     text = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
     return json.loads(text)
 
@@ -59,15 +62,13 @@ def project(home, away, kickoff):
         return m
 
 def _mock(home, away):
-    return {
-        "home": {"starters": [], "out": []},
-        "away": {"starters": [], "out": []},
-        "note": "Sample mode — add ANTHROPIC_API_KEY for live lineup projection.",
-    }
+    return {"home": {"starters": [], "out": []},
+            "away": {"starters": [], "out": []},
+            "note": "Sample mode — add OPENAI_API_KEY for live lineup projection."}
 
 def apply_minutes(player_pool, projection_side):
-    """Merge agent-projected minutes into the per-90 player rate pool.
-    Players not projected to start get reduced minutes; ruled-out get 0."""
+    """Merge agent-projected minutes into the per-90 player pool.
+    Ruled-out players are dropped; unlisted players get reduced minutes."""
     proj = {s["name"]: s["min"] for s in projection_side.get("starters", [])}
     out  = set(projection_side.get("out", []))
     merged = []
@@ -75,7 +76,7 @@ def apply_minutes(player_pool, projection_side):
         if p["name"] in out:
             continue
         p = dict(p)
-        p["min"] = proj.get(p["name"], 25 if p["name"] not in proj else p.get("min", 0))
+        p["min"] = proj.get(p["name"], 25)
         if p["min"] > 0:
             merged.append(p)
     return merged
