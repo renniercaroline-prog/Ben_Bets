@@ -1,0 +1,728 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>WC Edge</title>
+<style>
+  :root{
+    --pitch:#0A2A22; --card:#103328; --card2:#0E2C23; --line:#1E4A3B;
+    --chalk:#F2F5EE; --sage:#8FA89B; --gold:#F5C542; --red:#E5564E; --blue:#7FB2E6;
+    --mono:ui-monospace,'SF Mono',Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--pitch);color:var(--chalk);font-family:var(--sans);
+       padding:20px 16px 56px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:560px;margin:0 auto}
+  .eyebrow{color:var(--gold);font-family:var(--mono);font-size:11px;letter-spacing:2px}
+  h1{font-size:25px;font-weight:700;margin:6px 0 2px;line-height:1.05}
+  .sub{color:var(--sage);font-size:13px;margin:0}
+  .updated{color:var(--sage);font-family:var(--mono);font-size:11px;margin-top:6px}
+  .banner{background:rgba(245,197,66,.1);border:1px solid var(--gold);border-radius:10px;
+          padding:10px 12px;font-size:12px;color:var(--gold);margin:14px 0}
+  .controls{display:grid;grid-template-columns:1fr 1fr;gap:12px;background:var(--card);
+            border:1px solid var(--line);border-radius:14px;padding:14px;margin:16px 0}
+  label{color:var(--sage);font-size:11px;letter-spacing:.6px;text-transform:uppercase;display:block;margin-bottom:6px}
+  input[type=number]{width:100%;background:var(--card2);color:var(--chalk);
+     border:1px solid var(--line);border-radius:8px;padding:9px 10px;font-family:var(--mono);font-size:15px}
+  input[type=range]{width:100%;accent-color:var(--gold);margin-top:12px}
+  .fixture{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+  .teams{font-size:18px;font-weight:700}
+  .kick{color:var(--sage);font-family:var(--mono);font-size:11px;margin-top:2px}
+  .modelline{display:flex;gap:14px;color:var(--sage);font-family:var(--mono);font-size:12px;margin:10px 0 6px;flex-wrap:wrap}
+  .modelline b{color:var(--chalk)}
+  .agent{display:flex;gap:7px;align-items:flex-start;background:var(--card2);border:1px solid var(--line);
+         border-radius:8px;padding:8px 10px;font-size:12px;color:var(--sage);margin-bottom:6px}
+  .agent .ai{color:var(--blue);font-family:var(--mono);font-size:10px;letter-spacing:.5px;flex:none;padding-top:1px}
+  details{border-top:1px solid var(--card2)}
+  summary{list-style:none;cursor:pointer;padding:11px 0;font-size:14px;font-weight:600;
+          display:flex;justify-content:space-between;align-items:center}
+  summary::-webkit-details-marker{display:none}
+  summary .chev{color:var(--sage);font-family:var(--mono)}
+  .row{display:grid;grid-template-columns:1fr 66px 60px;gap:8px;align-items:center;
+       padding:8px 0;border-top:1px solid var(--card2)}
+  .mlabel{font-size:13px}
+  .mlabel small{display:block;color:var(--sage);font-family:var(--mono);font-size:11px}
+  .odds{width:100%;text-align:center;background:var(--card2);color:var(--chalk);
+        border:1px solid var(--line);border-radius:8px;padding:7px 4px;font-family:var(--mono);font-size:14px}
+  .verdict{text-align:right;font-family:var(--mono);font-size:11px}
+  .tag{display:inline-block;padding:2px 6px;border-radius:5px;font-size:10px;letter-spacing:.5px}
+  .val{background:var(--gold);color:var(--pitch)}
+  .pass{border:1px solid var(--line);color:var(--sage)}
+  .stake{color:var(--gold);font-weight:700}
+  .ev-neg{color:var(--red)}
+  footer{color:var(--sage);font-size:11px;line-height:1.5;margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+  a{color:var(--blue)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">WORLD CUP 2026 · DAILY EDGE</div>
+  <h1>Where the model beats your book.</h1>
+  <p class="sub">Type the odds your book offers into any market. Gold means the model rates it higher than the price implies.</p>
+  <div class="updated" id="updated"></div>
+  <div id="banner"></div>
+  <div class="controls">
+    <div><label>Bankroll</label><input type="number" id="bankroll" value="100" inputmode="decimal"></div>
+    <div><label>Kelly fraction · <span id="kf">0.25</span>×</label>
+         <input type="range" id="kelly" min="0.1" max="1" step="0.05" value="0.25"></div>
+  </div>
+  <div id="fixtures"></div>
+  <footer>
+    Probabilities come from a statistical model (Poisson goals, Negative-Binomial corners, per-90 player rates).
+    The AI agent only projects lineups and minutes from team news — it never sets a probability.
+    Estimates, not certainties; a flagged edge is only as good as the data. Bet only what you can afford to lose.
+    Support: <a href="https://www.begambleaware.org">BeGambleAware.org</a>.
+  </footer>
+</div>
+<script>
+const SAMPLE = {
+  "updated": "2026-06-26T22:05:49.016672+00:00",
+  "sample": true,
+  "fixtures": [
+    {
+      "home": "Spain",
+      "away": "Uruguay",
+      "xg": [
+        2.62,
+        0.9
+      ],
+      "corners": [
+        7.9,
+        4.8
+      ],
+      "agent_note": "Sample mode \u2014 add ANTHROPIC_API_KEY for live lineup projection.",
+      "groups": [
+        {
+          "name": "Match result",
+          "markets": [
+            {
+              "label": "Spain win",
+              "p": 0.741
+            },
+            {
+              "label": "Draw",
+              "p": 0.153
+            },
+            {
+              "label": "Uruguay win",
+              "p": 0.107
+            }
+          ]
+        },
+        {
+          "name": "Total goals",
+          "markets": [
+            {
+              "label": "Over 0.5",
+              "p": 0.97
+            },
+            {
+              "label": "Over 1.5",
+              "p": 0.866
+            },
+            {
+              "label": "Over 2.5",
+              "p": 0.683
+            },
+            {
+              "label": "Over 3.5",
+              "p": 0.468
+            },
+            {
+              "label": "Over 4.5",
+              "p": 0.278
+            }
+          ]
+        },
+        {
+          "name": "Both teams to score",
+          "markets": [
+            {
+              "label": "Yes",
+              "p": 0.549
+            },
+            {
+              "label": "No",
+              "p": 0.451
+            }
+          ]
+        },
+        {
+          "name": "First-half result",
+          "markets": [
+            {
+              "label": "Spain lead",
+              "p": 0.558
+            },
+            {
+              "label": "Level",
+              "p": 0.315
+            },
+            {
+              "label": "Uruguay lead",
+              "p": 0.127
+            }
+          ]
+        },
+        {
+          "name": "Half-time / Full-time",
+          "markets": [
+            {
+              "label": "Spa/Spa",
+              "p": 0.515
+            },
+            {
+              "label": "Draw/Spa",
+              "p": 0.191
+            },
+            {
+              "label": "Draw/Draw",
+              "p": 0.084
+            },
+            {
+              "label": "Uru/Uru",
+              "p": 0.057
+            },
+            {
+              "label": "Draw/Uru",
+              "p": 0.04
+            },
+            {
+              "label": "Uru/Spa",
+              "p": 0.035
+            }
+          ]
+        },
+        {
+          "name": "Corners",
+          "markets": [
+            {
+              "label": "Total over 7.5",
+              "p": 0.858
+            },
+            {
+              "label": "Total over 8.5",
+              "p": 0.795
+            },
+            {
+              "label": "Total over 9.5",
+              "p": 0.721
+            },
+            {
+              "label": "Total over 10.5",
+              "p": 0.641
+            },
+            {
+              "label": "Uruguay 3+",
+              "p": 0.778
+            },
+            {
+              "label": "Uruguay 4+",
+              "p": 0.631
+            },
+            {
+              "label": "Uruguay 5+",
+              "p": 0.482
+            },
+            {
+              "label": "Spain 4+",
+              "p": 0.875
+            },
+            {
+              "label": "Spain 5+",
+              "p": 0.792
+            },
+            {
+              "label": "Spain 6+",
+              "p": 0.695
+            }
+          ]
+        },
+        {
+          "name": "Players",
+          "markets": [
+            {
+              "player": "Oyarzabal",
+              "label": "Oyarzabal to score",
+              "p": 0.656
+            },
+            {
+              "player": "Oyarzabal",
+              "label": "Oyarzabal to score or assist",
+              "p": 0.808
+            },
+            {
+              "player": "Oyarzabal",
+              "label": "Oyarzabal 1+ shot on target",
+              "p": 0.92
+            },
+            {
+              "player": "Oyarzabal",
+              "label": "Oyarzabal to commit a foul",
+              "p": 0.551
+            },
+            {
+              "player": "Oyarzabal",
+              "label": "Oyarzabal to be fouled",
+              "p": 0.632
+            },
+            {
+              "player": "Yamal",
+              "label": "Yamal to score",
+              "p": 0.54
+            },
+            {
+              "player": "Yamal",
+              "label": "Yamal to score or assist",
+              "p": 0.822
+            },
+            {
+              "player": "Yamal",
+              "label": "Yamal 1+ shot on target",
+              "p": 0.937
+            },
+            {
+              "player": "Yamal",
+              "label": "Yamal to commit a foul",
+              "p": 0.359
+            },
+            {
+              "player": "Yamal",
+              "label": "Yamal to be fouled",
+              "p": 0.798
+            },
+            {
+              "player": "Pedri",
+              "label": "Pedri to score",
+              "p": 0.307
+            },
+            {
+              "player": "Pedri",
+              "label": "Pedri to score or assist",
+              "p": 0.697
+            },
+            {
+              "player": "Pedri",
+              "label": "Pedri 1+ shot on target",
+              "p": 0.808
+            },
+            {
+              "player": "Pedri",
+              "label": "Pedri to commit a foul",
+              "p": 0.646
+            },
+            {
+              "player": "Pedri",
+              "label": "Pedri to be fouled",
+              "p": 0.707
+            },
+            {
+              "player": "Nunez",
+              "label": "Nunez to score",
+              "p": 0.242
+            },
+            {
+              "player": "Nunez",
+              "label": "Nunez to score or assist",
+              "p": 0.322
+            },
+            {
+              "player": "Nunez",
+              "label": "Nunez 1+ shot on target",
+              "p": 0.54
+            },
+            {
+              "player": "Nunez",
+              "label": "Nunez to commit a foul",
+              "p": 0.565
+            },
+            {
+              "player": "Nunez",
+              "label": "Nunez to be fouled",
+              "p": 0.632
+            },
+            {
+              "player": "Valverde",
+              "label": "Valverde to score",
+              "p": 0.208
+            },
+            {
+              "player": "Valverde",
+              "label": "Valverde to score or assist",
+              "p": 0.372
+            },
+            {
+              "player": "Valverde",
+              "label": "Valverde 1+ shot on target",
+              "p": 0.631
+            },
+            {
+              "player": "Valverde",
+              "label": "Valverde to commit a foul",
+              "p": 0.753
+            },
+            {
+              "player": "Valverde",
+              "label": "Valverde to be fouled",
+              "p": 0.632
+            },
+            {
+              "player": "Araujo M.",
+              "label": "Araujo M. to score",
+              "p": 0.222
+            },
+            {
+              "player": "Araujo M.",
+              "label": "Araujo M. to score or assist",
+              "p": 0.335
+            },
+            {
+              "player": "Araujo M.",
+              "label": "Araujo M. 1+ shot on target",
+              "p": 0.499
+            },
+            {
+              "player": "Araujo M.",
+              "label": "Araujo M. to commit a foul",
+              "p": 0.573
+            },
+            {
+              "player": "Araujo M.",
+              "label": "Araujo M. to be fouled",
+              "p": 0.646
+            }
+          ]
+        }
+      ],
+      "kickoff": "2026-06-26T18:00:00Z"
+    },
+    {
+      "home": "Brazil",
+      "away": "Netherlands",
+      "xg": [
+        1.84,
+        1.57
+      ],
+      "corners": [
+        5.7,
+        5.2
+      ],
+      "agent_note": "Sample mode \u2014 add ANTHROPIC_API_KEY for live lineup projection.",
+      "groups": [
+        {
+          "name": "Match result",
+          "markets": [
+            {
+              "label": "Brazil win",
+              "p": 0.444
+            },
+            {
+              "label": "Draw",
+              "p": 0.224
+            },
+            {
+              "label": "Netherlands win",
+              "p": 0.332
+            }
+          ]
+        },
+        {
+          "name": "Total goals",
+          "markets": [
+            {
+              "label": "Over 0.5",
+              "p": 0.967
+            },
+            {
+              "label": "Over 1.5",
+              "p": 0.853
+            },
+            {
+              "label": "Over 2.5",
+              "p": 0.661
+            },
+            {
+              "label": "Over 3.5",
+              "p": 0.442
+            },
+            {
+              "label": "Over 4.5",
+              "p": 0.256
+            }
+          ]
+        },
+        {
+          "name": "Both teams to score",
+          "markets": [
+            {
+              "label": "Yes",
+              "p": 0.665
+            },
+            {
+              "label": "No",
+              "p": 0.335
+            }
+          ]
+        },
+        {
+          "name": "First-half result",
+          "markets": [
+            {
+              "label": "Brazil lead",
+              "p": 0.354
+            },
+            {
+              "label": "Level",
+              "p": 0.362
+            },
+            {
+              "label": "Netherlands lead",
+              "p": 0.284
+            }
+          ]
+        },
+        {
+          "name": "Half-time / Full-time",
+          "markets": [
+            {
+              "label": "Bra/Bra",
+              "p": 0.274
+            },
+            {
+              "label": "Net/Net",
+              "p": 0.197
+            },
+            {
+              "label": "Draw/Bra",
+              "p": 0.137
+            },
+            {
+              "label": "Draw/Draw",
+              "p": 0.116
+            },
+            {
+              "label": "Draw/Net",
+              "p": 0.109
+            },
+            {
+              "label": "Bra/Draw",
+              "p": 0.054
+            }
+          ]
+        },
+        {
+          "name": "Corners",
+          "markets": [
+            {
+              "label": "Total over 7.5",
+              "p": 0.768
+            },
+            {
+              "label": "Total over 8.5",
+              "p": 0.681
+            },
+            {
+              "label": "Total over 9.5",
+              "p": 0.588
+            },
+            {
+              "label": "Total over 10.5",
+              "p": 0.495
+            },
+            {
+              "label": "Netherlands 3+",
+              "p": 0.813
+            },
+            {
+              "label": "Netherlands 4+",
+              "p": 0.68
+            },
+            {
+              "label": "Netherlands 5+",
+              "p": 0.537
+            },
+            {
+              "label": "Brazil 4+",
+              "p": 0.73
+            },
+            {
+              "label": "Brazil 5+",
+              "p": 0.598
+            },
+            {
+              "label": "Brazil 6+",
+              "p": 0.468
+            }
+          ]
+        },
+        {
+          "name": "Players",
+          "markets": [
+            {
+              "player": "Rodrygo",
+              "label": "Rodrygo to score",
+              "p": 0.439
+            },
+            {
+              "player": "Rodrygo",
+              "label": "Rodrygo to score or assist",
+              "p": 0.618
+            },
+            {
+              "player": "Rodrygo",
+              "label": "Rodrygo 1+ shot on target",
+              "p": 0.834
+            },
+            {
+              "player": "Rodrygo",
+              "label": "Rodrygo to commit a foul",
+              "p": 0.433
+            },
+            {
+              "player": "Rodrygo",
+              "label": "Rodrygo to be fouled",
+              "p": 0.678
+            },
+            {
+              "player": "Vinicius",
+              "label": "Vinicius to score",
+              "p": 0.493
+            },
+            {
+              "player": "Vinicius",
+              "label": "Vinicius to score or assist",
+              "p": 0.706
+            },
+            {
+              "player": "Vinicius",
+              "label": "Vinicius 1+ shot on target",
+              "p": 0.901
+            },
+            {
+              "player": "Vinicius",
+              "label": "Vinicius to commit a foul",
+              "p": 0.593
+            },
+            {
+              "player": "Vinicius",
+              "label": "Vinicius to be fouled",
+              "p": 0.865
+            },
+            {
+              "player": "Gakpo",
+              "label": "Gakpo to score",
+              "p": 0.407
+            },
+            {
+              "player": "Gakpo",
+              "label": "Gakpo to score or assist",
+              "p": 0.605
+            },
+            {
+              "player": "Gakpo",
+              "label": "Gakpo 1+ shot on target",
+              "p": 0.824
+            },
+            {
+              "player": "Gakpo",
+              "label": "Gakpo to commit a foul",
+              "p": 0.503
+            },
+            {
+              "player": "Gakpo",
+              "label": "Gakpo to be fouled",
+              "p": 0.632
+            },
+            {
+              "player": "Depay",
+              "label": "Depay to score",
+              "p": 0.403
+            },
+            {
+              "player": "Depay",
+              "label": "Depay to score or assist",
+              "p": 0.562
+            },
+            {
+              "player": "Depay",
+              "label": "Depay 1+ shot on target",
+              "p": 0.808
+            },
+            {
+              "player": "Depay",
+              "label": "Depay to commit a foul",
+              "p": 0.551
+            },
+            {
+              "player": "Depay",
+              "label": "Depay to be fouled",
+              "p": 0.624
+            }
+          ]
+        }
+      ],
+      "kickoff": "2026-06-29T19:00:00Z"
+    }
+  ]
+};
+let DATA = SAMPLE, odds = {};
+const OPEN = {0:true,1:true};  // first two groups open by default
+const pct = x => (100*x).toFixed(1)+'%';
+const fmt = d => { try{return new Date(d).toLocaleString([], {weekday:'short',hour:'2-digit',minute:'2-digit'});}catch(e){return d;} };
+const kf = () => parseFloat(document.getElementById('kelly').value);
+const bk = () => parseFloat(document.getElementById('bankroll').value)||0;
+
+function verdict(p, o){
+  if(!(o>1)) return '';
+  const ev = p*o-1;
+  if(ev>0){ const k=Math.max(0,(p*o-1)/(o-1))*kf()*bk();
+    return `<span class="tag val">VALUE</span><br>stake <span class="stake">${k.toFixed(2)}</span>`; }
+  return `<span class="tag pass">PASS</span><br><span class="ev-neg">${(ev*100).toFixed(1)}%</span>`;
+}
+
+function render(){
+  document.getElementById('updated').textContent = DATA.updated==='sample'?'':'Updated '+fmt(DATA.updated);
+  document.getElementById('banner').innerHTML = DATA.sample
+    ? '<div class="banner">Showing sample data. Add your API-Football and Anthropic keys in GitHub to switch to live daily numbers and lineups.</div>':'';
+  const root = document.getElementById('fixtures'); root.innerHTML='';
+  DATA.fixtures.forEach((f, fi) => {
+    const el = document.createElement('div'); el.className='fixture';
+    el.innerHTML =
+      `<div class="teams">${f.home} <span style="color:var(--sage)">v</span> ${f.away}</div>
+       <div class="kick">${fmt(f.kickoff)}</div>
+       <div class="modelline"><span>xG <b>${f.xg[0]} – ${f.xg[1]}</b></span>
+         <span>corners <b>${f.corners[0]} – ${f.corners[1]}</b></span></div>
+       ${f.agent_note?`<div class="agent"><span class="ai">AGENT</span><span>${f.agent_note}</span></div>`:''}`;
+    f.groups.forEach((g, gi) => {
+      const d = document.createElement('details'); if(OPEN[gi]) d.open=true;
+      const s = document.createElement('summary');
+      s.innerHTML = `<span>${g.name}</span><span class="chev">${d.open?'–':'+'}</span>`;
+      d.appendChild(s);
+      g.markets.forEach((m, mi) => {
+        const id=`o_${fi}_${gi}_${mi}`, o=odds[id];
+        const row=document.createElement('div'); row.className='row';
+        row.innerHTML =
+          `<div class="mlabel">${m.label}<small>model ${pct(m.p)}${o&&o>1?' · impl '+pct(1/o):''}</small></div>
+           <input class="odds" id="${id}" inputmode="decimal" placeholder="odds" value="${o||''}">
+           <div class="verdict">${verdict(m.p,o)}</div>`;
+        d.appendChild(row);
+      });
+      d.addEventListener('toggle',()=>{ s.querySelector('.chev').textContent=d.open?'–':'+'; });
+      el.appendChild(d);
+    });
+    root.appendChild(el);
+  });
+  document.querySelectorAll('.odds').forEach(inp=>{
+    inp.addEventListener('input',e=>{ odds[e.target.id]=parseFloat(e.target.value); _f=e.target.id; render(); });
+  });
+}
+let _f=null;
+const _r=render; render=function(){ _r(); if(_f){const n=document.getElementById(_f); if(n){n.focus(); n.setSelectionRange(n.value.length,n.value.length);}} };
+document.getElementById('kelly').addEventListener('input',e=>{document.getElementById('kf').textContent=(+e.target.value).toFixed(2); render();});
+document.getElementById('bankroll').addEventListener('input',render);
+fetch('data.json',{cache:'no-store'}).then(r=>r.ok?r.json():Promise.reject()).then(d=>{DATA=d; render();}).catch(()=>render());
+</script>
+</body>
+</html>
