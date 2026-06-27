@@ -7,3 +7,4 @@ xg_cache.json
 *.env
 *.env.*
 ben.env*
+.claude/

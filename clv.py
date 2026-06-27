@@ -116,6 +116,24 @@ def update_log(snapshots, results_fn, now=None):
     return log
 
 # ----------------------------------------------------------------- scoreboard
+def summary_dict(log=None):
+    """Machine-readable track record (embedded in data.json for the website panel)."""
+    log = log if log is not None else load()
+    recs = list(log.values())
+    clv = [r["clv"] for r in recs if r.get("clv") is not None]
+    settled = [r for r in recs if r.get("result")]
+    wins = sum(1 for r in settled if r["result"] == "win")
+    pnl = sum(r["pnl"] for r in settled if r.get("pnl") is not None)
+    return {
+        "logged": len(recs),
+        "open": sum(1 for r in recs if r["status"] == "open"),
+        "closed": len(clv),
+        "avg_clv": round(sum(clv) / len(clv), 4) if clv else None,
+        "beat_close": round(sum(1 for c in clv if c > 0) / len(clv), 3) if clv else None,
+        "settled": len(settled), "wins": wins, "losses": len(settled) - wins,
+        "pnl": round(pnl, 2), "roi": round(pnl / len(settled), 3) if settled else None,
+    }
+
 def summary(log=None):
     log = log if log is not None else load()
     recs = list(log.values())

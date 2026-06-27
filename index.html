@@ -72,6 +72,13 @@
   .bnum{text-align:right;font-family:var(--mono);font-size:13px;color:var(--chalk)}
   .bnote{color:var(--sage);font-size:11px;line-height:1.5;margin-top:10px;border-top:1px solid var(--card2);padding-top:8px}
   .bnote b{color:var(--gold)}
+  .track{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:14px 0}
+  .thead{font-weight:700;font-size:13px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:baseline}
+  .thead .bsub{color:var(--sage)}
+  .trow{display:flex;justify-content:space-between;align-items:baseline;padding:6px 0;border-top:1px solid var(--line);font-size:13px}
+  .trow span{color:var(--sage)}
+  .trow b{font-family:var(--mono);font-size:14px}
+  .pos{color:var(--gold)} .neg{color:var(--red)}
 </style>
 </head>
 <body>
@@ -98,6 +105,7 @@
          <input type="range" id="kelly" min="0.1" max="1" step="0.05" value="0.25"></div>
     <div class="hint">Bankroll = your total betting pot. Kelly fraction = how aggressively to stake (0.25 = cautious quarter-Kelly).</div>
   </div>
+  <div id="track"></div>
   <div id="board"></div>
   <div id="fixtures"></div>
   <footer>
@@ -744,10 +752,34 @@ function renderBoard(){
     </div>`; }).join('');
   el.innerHTML=`<div class="board"><div class="bhead"><span>Today’s best bets</span><span class="bsub">candidate edges · unproven</span></div>${rows}${note}</div>`;
 }
+// Model track record — how the flagged bets have actually done (paper-trade).
+function renderTrack(){
+  const el=document.getElementById('track'); const t=DATA.track;
+  if(!t){ el.innerHTML=''; return; }                 // sample mode / no live data
+  const sign=x=>x>0?'pos':(x<0?'neg':'');
+  const pct=x=>(x>=0?'+':'')+(100*x).toFixed(1)+'%';
+  let rows='';
+  if(t.settled>0){
+    rows+=`<div class="trow"><span>Settled bets</span><b>${t.wins}W – ${t.losses}L</b></div>`;
+    rows+=`<div class="trow"><span>Profit (1 unit flat)</span><b class="${sign(t.pnl)}">${(t.pnl>=0?'+':'')+t.pnl.toFixed(2)}u · ROI ${pct(t.roi)}</b></div>`;
+  } else {
+    rows+=`<div class="trow"><span>Settled bets</span><b>none yet</b></div>`;
+  }
+  if(t.closed>0){
+    rows+=`<div class="trow"><span>Closing-line value <small style="color:var(--sage)">(the key signal)</small></span><b class="${sign(t.avg_clv)}">${pct(t.avg_clv)} · beat close ${(100*t.beat_close).toFixed(0)}%</b></div>`;
+  }
+  const note = t.settled<30
+    ? `Early days — needs ~30+ settled bets before the numbers mean much. Watch <b>closing-line value</b> first: consistently positive = the model is genuinely ahead of the market.`
+    : `Watch closing-line value: consistently positive = a real edge.`;
+  el.innerHTML=`<div class="track"><div class="thead"><span>Model track record</span>`
+    +`<span class="bsub">${t.logged} flagged · ${t.open} open</span></div>${rows}`
+    +`<div class="bnote" style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px">${note}</div></div>`;
+}
 function render(){
   document.getElementById('updated').textContent = DATA.updated==='sample'?'':'Updated '+fmt(DATA.updated);
   document.getElementById('banner').innerHTML = DATA.sample
     ? '<div class="banner">Showing sample data. Add your API-Football and Anthropic keys in GitHub to switch to live daily numbers and lineups.</div>':'';
+  renderTrack();
   renderBoard();
   const root = document.getElementById('fixtures'); root.innerHTML='';
   DATA.fixtures.forEach((f, fi) => {

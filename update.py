@@ -373,8 +373,11 @@ def build_sample():
 
 def main():
     fixtures,sample=(build_sample() if not API_KEY else build_live())
-    json.dump({"updated":datetime.datetime.now(datetime.timezone.utc).isoformat(),
-               "sample":sample,"fixtures":fixtures}, open(OUT,"w"), indent=2)
+    out={"updated":datetime.datetime.now(datetime.timezone.utc).isoformat(),
+         "sample":sample,"fixtures":fixtures}
+    if not sample:
+        out["track"]=clv.summary_dict()           # model track record for the website panel
+    json.dump(out, open(OUT,"w"), indent=2)
     print(f"Wrote {OUT} | {len(fixtures)} fixtures | sample={sample}")
 
 if __name__=="__main__":
