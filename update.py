@@ -13,7 +13,9 @@ LEAGUE_ID = int(os.environ.get("WC_LEAGUE_ID", "1"))
 SEASON    = int(os.environ.get("WC_SEASON", "2026"))
 OUT       = os.path.join(os.path.dirname(__file__), "data.json")
 LOOKAHEAD_DAYS = 4               # today + next 3 days of fixtures
-ELO_SEASONS_BACK = 3             # how many seasons of internationals to build the Elo prior from
+ELO_SEASONS_BACK = 4             # seasons of internationals for the Elo prior; the 15-month
+                                 # time-decay down-weights the oldest, so extra history is safe
+                                 # and helps teams that play infrequently (international = sparse)
 CLUB_SEASON = SEASON - 1         # club-season used for player priors (just-finished season)
 XG_LEAGUE = os.environ.get("XG_LEAGUE", "INT-World Cup").strip()  # FBref key for team xG (best-effort)
 
@@ -88,9 +90,12 @@ def build_historical_elo(team_ids, cache):
                 except (KeyError, TypeError):
                     continue
     print(f"   Elo prior built from {len(matches)} historical fixtures across {len(team_ids)} teams")
-    # 2D attack/defence prior (separate atk & def; beat 1D on result/BTTS/corners in
-    # the live PL backtest). Same rates_asof() interface, so the shrinkage blend is unchanged.
-    return elo.GoalEloEngine().fit(matches) if matches else None
+    # 1D Elo prior. NOTE: the 2D GoalEloEngine beat 1D on data-rich CLUB football (PL),
+    # but a multi-confederation INTERNATIONAL backtest (3,061 matches) found 1D wins on
+    # every market — national teams play too few games for the 2D model's doubled
+    # parameters to be estimated reliably. The product is international, so we use 1D.
+    # (Swap to GoalEloEngine if ever retargeting at club leagues.)
+    return elo.EloEngine().fit(matches) if matches else None
 
 def _club_per90(pid, cache):
     """§2.2 club-season per-90s for a player (a ~35-game sample), or None.

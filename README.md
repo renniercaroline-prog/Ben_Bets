@@ -10,7 +10,7 @@ A phone-friendly web page showing model probabilities for World Cup markets, ref
 
 ## Files
 - **model.py** — all the probability math. Poisson goals, Negative-Binomial corners, per-90 player props. No AI, no network. Calibration constants (`MU_GOALS`, `LEAGUE_AVG_CORNERS`, `CORNER_R`, `H1_SHARE`) are env-overridable so the backtest can A/B re-fitted values.
-- **elo.py** — historical team-strength prior. The live pipeline uses a **2D attack/defence** rating (`GoalEloEngine`): separate attack and defence strengths updated by online gradient ascent on the Poisson likelihood of each scoreline, so a team can be high-scoring *and* high-conceding (the 1D `EloEngine`, where `def = 1/atk`, can't). The sparse World-Cup form is shrunk toward this prior (`rating = w·prior + (1−w)·form`), so a team is anchored by years of history, not 3 games. Can update from xG instead of goals (Phase 2.1). No network.
+- **elo.py** — historical team-strength prior. A time-decayed, margin-adjusted Elo over each team's past international results, mapped to attack/defence rates. The sparse World-Cup form is shrunk toward this prior (`rating = w·prior + (1−w)·form`), so a team is anchored by years of history, not 3 games. Also ships a 2D attack/defence variant (`GoalEloEngine`) that separates scoring and conceding — better on data-rich **club** football, but the international backtest showed plain 1D wins when teams play few games, so the live (international) pipeline uses 1D. Can update from xG instead of goals (Phase 2.1). No network.
 - **xg.py** — optional expected-goals team ratings from FBref (via `soccerdata`), used in place of raw goals where available and falling back to goals otherwise. Best-effort and cached; the pipeline never breaks if xG is missing.
 - **agent.py** — the AI layer. Uses an LLM + web search to project each team's lineup and minutes from the latest news. It returns lineups and minutes only — it never produces a probability.
 - **update.py** — runs daily: fetch data → build the Elo prior → ask the agent for lineups → run the model → write `data.json`. Missing/rested key players now also dock **team** attack/defence, not just their own props.
@@ -37,14 +37,33 @@ Phase-1 change (Elo prior + shrinkage) was verified on **real Premier League dat
 
 The old baseline is negative-skill on every market (over-confident, worse than the base
 rate). The Elo prior turns the result market positive and roughly halves the deficit
-elsewhere, with calibration going from wild to near-diagonal. The **2D attack/defence**
-prior (`RATING_MODEL=elo2d`, now the live default) improves it further on the markets that
-matter — result 0.614 → **0.609**, BTTS and all corners lines down too (it trades a little
-on goals totals). Soft markets stay slightly negative on **club** data partly because the
-model omits home advantage (see below) — on neutral-venue internationals they should fare
-better. Synthetic mode (no key) reproduces the same pattern offline. Re-baseline constants
-from real data with `python backtest.py --recalibrate` (prints data-fitted `MU_GOALS` /
-corners / dispersion / rho).
+elsewhere, with calibration going from wild to near-diagonal. Synthetic mode (no key)
+reproduces the same pattern offline. Re-baseline constants from real data with
+`python backtest.py --recalibrate` (prints data-fitted `MU_GOALS` / corners / dispersion / rho).
+
+### Validated on international football (the actual domain)
+The numbers above are club football. The same harness, pointed at a multi-confederation
+basket of **3,061 senior international matches** (World Cup, Euro, Copa, AFCON, Asian Cup,
+Gold Cup, Nations Leagues, WC qualifiers, friendlies; pass the league IDs as a comma list
+in `BACKTEST_LEAGUE`), confirms the prior transfers — and transfers *better*:
+
+| model     | result Brier | skill% |
+|-----------|:------------:|:------:|
+| baseline  |    0.648     | −2.0%  |
+| **elo (1D)** | **0.591** | **+6.9%** |
+| elo2d (2D)|    0.595     | +6.3%  |
+
+Two findings drove live defaults: (1) the 1D Elo prior gives **+6.9% skill on the result
+market** for internationals (stronger than the +3.1% on the PL); (2) the **2D** model that
+won on club football **loses** here — national teams play too few games to estimate
+separate attack and defence reliably — so the live pipeline uses **1D**. A reminder that a
+gain measured in the wrong domain doesn't always hold in the right one.
+
+### Data coverage of the WC squads
+Audited 276 key players across 35 WC squads: they play in **55 club leagues across 42
+countries**. Player-prop priors (club-season per-90s via API-Football) cover all of them;
+~**53%** are in a big-5 European league, which is also where FBref **xG** is available — so
+xG enrichment is big-5-skewed while the core player data is genuinely worldwide.
 
 ## Better inputs (Phase 2)
 - **xG drives team ratings.** Goals are noisy; xG stabilises faster, so attack/defence

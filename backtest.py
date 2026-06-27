@@ -51,7 +51,9 @@ import model, elo
 API_KEY    = os.environ.get("API_FOOTBALL_KEY", "").strip()
 BASE       = "https://v3.football.api-sports.io"
 MODE       = os.environ.get("BACKTEST_MODE", "auto").strip().lower()
-LEAGUE     = int(os.environ.get("BACKTEST_LEAGUE", "39"))          # default: a club league for volume
+# one or more leagues (comma-separated). Default: a club league for volume; pass a
+# basket of international competition IDs to test transfer to international football.
+LEAGUES    = [int(x) for x in os.environ.get("BACKTEST_LEAGUE", "39").split(",") if x.strip()]
 SEASONS    = [int(s) for s in os.environ.get("BACKTEST_SEASONS", "2021,2022,2023").split(",") if s.strip()]
 WITH_CORNERS = os.environ.get("BACKTEST_CORNERS", "0") == "1"      # corners need 1 extra call/fixture
 WINDOW     = int(os.environ.get("BACKTEST_WINDOW", "5"))           # rolling form window (matches current code)
@@ -86,14 +88,16 @@ def load_live(cache):
     Field paths reuse the ones already proven in update.py: fixture.date,
     teams.home.id, goals.home, and the /fixtures/statistics 'Corner Kicks' type."""
     matches = []
-    for season in SEASONS:
-        ckey = f"fx_{LEAGUE}_{season}"
+    for league in LEAGUES:
+      for season in SEASONS:
+        ckey = f"fx_{league}_{season}"
         if ckey in cache:
             rows = cache[ckey]
         else:
-            rows = _api(f"/fixtures?league={LEAGUE}&season={season}&status=FT")
+            rows = _api(f"/fixtures?league={league}&season={season}&status=FT")
             cache[ckey] = rows
-            print(f"   fetched {len(rows)} fixtures for league {LEAGUE} season {season}")
+            if rows:
+                print(f"   fetched {len(rows)} fixtures for league {league} season {season}")
         for f in rows:
             try:
                 fid = f["fixture"]["id"]
