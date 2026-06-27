@@ -24,7 +24,7 @@ XG_LEAGUE = os.environ.get("XG_LEAGUE", "INT-World Cup").strip()  # FBref key fo
 # with prices that aren't placeable in the UK. Default = UK-accessible books in the
 # feed; override via env (comma-separated). Empty string = use every book.
 ODDS_BOOKS = set(b.strip() for b in os.environ.get(
-    "ODDS_BOOKS", "Bet365,William Hill,Unibet,Betfair,BetVictor,888Sport,10Bet").split(",") if b.strip())
+    "ODDS_BOOKS", "William Hill,Unibet,Betfair,BetVictor,888Sport,10Bet").split(",") if b.strip())
 
 def api(path):
     req = urllib.request.Request(BASE + path, headers={"x-apisports-key": API_KEY})
