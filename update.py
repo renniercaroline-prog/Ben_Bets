@@ -34,8 +34,27 @@ def api(path):
         print(f"!! API errors on {path.split('?')[0]}: {payload['errors']}")
     return payload.get("response", [])
 
+# ---------------------------------------------------------------- cache freshness
+# Some data changes as the tournament unfolds (WC form, WC player stats, this
+# season's results) and must refresh; some never changes (past seasons, a finished
+# club season) and can be cached forever. We key refreshable entries by the UTC day
+# so the first run each day refetches and the other ~6 daily runs reuse it.
+_MISS = object()
+def _today():
+    return datetime.datetime.now(datetime.timezone.utc).date().isoformat()
+def _cache_get(cache, key, refresh_daily=False):
+    e = cache.get(key)
+    if not isinstance(e, dict) or "v" not in e:      # missing or pre-versioning raw entry
+        return _MISS
+    if refresh_daily and e.get("day") != _today():   # stale -> refetch
+        return _MISS
+    return e["v"]
+def _cache_put(cache, key, value):
+    cache[key] = {"day": _today(), "v": value}
+
 def team_rates(tid, name, cache):
-    if str(tid) in cache: return cache[str(tid)]
+    c = _cache_get(cache, str(tid), refresh_daily=True)   # WC form -> refresh daily
+    if c is not _MISS: return c
     fx = api(f"/fixtures?team={tid}&league={LEAGUE_ID}&season={SEASON}&status=FT")
     gf=ga=cf=ca=sotc=n=0
     for f in fx[-5:]:
@@ -63,7 +82,7 @@ def team_rates(tid, name, cache):
             r.update({k: xr[k] for k in ("atk", "def") if k in xr})
     except Exception as e:
         print(f"   (team xG skipped for {name}: {e})")
-    cache[str(tid)]=r; return r
+    _cache_put(cache, str(tid), r); return r
 
 def build_historical_elo(team_ids, cache):
     """Phase 1.2 prior: fit a time-decayed Elo over each WC team's recent
@@ -76,11 +95,12 @@ def build_historical_elo(team_ids, cache):
     for tid in team_ids:
         for s in seasons:
             ck = f"h{tid}_{s}"
-            if ck in cache:
-                rows = cache[ck]
-            else:
+            # current season's results still change as the WC plays -> refresh daily;
+            # finished past seasons never change -> cache forever
+            rows = _cache_get(cache, ck, refresh_daily=(s >= SEASON))
+            if rows is _MISS:
                 rows = api(f"/fixtures?team={tid}&season={s}&status=FT")
-                cache[ck] = rows
+                _cache_put(cache, ck, rows)
             for f in rows:
                 try:
                     fid = f["fixture"]["id"]
@@ -108,7 +128,8 @@ def _club_per90(pid, cache):
     """§2.2 club-season per-90s for a player (a ~35-game sample), or None.
     Picks the competition with the most minutes (their main club league)."""
     key=f"club{pid}"
-    if key in cache: return cache[key]
+    c=_cache_get(cache, key)                          # finished club season -> static, cache forever
+    if c is not _MISS: return c
     res=None
     try:
         rows=api(f"/players?id={pid}&season={CLUB_SEASON}")
@@ -122,11 +143,12 @@ def _club_per90(pid, cache):
                  "fd90":p90(best["fouls"]["drawn"])}
     except (KeyError, TypeError, IndexError) as e:
         print(f"   (club priors skipped for player {pid}: {e})")
-    cache[key]=res; return res
+    _cache_put(cache, key, res); return res
 
 def player_pool(tid, cache):
     key=f"p{tid}"
-    if key in cache: return cache[key]
+    c=_cache_get(cache, key, refresh_daily=True)      # WC player stats -> refresh daily
+    if c is not _MISS: return c
     rows=api(f"/players?team={tid}&league={LEAGUE_ID}&season={SEASON}&page=1")
     pool=[]
     for row in rows:
@@ -146,7 +168,7 @@ def player_pool(tid, cache):
             w=elo.shrink_weight(p.get("wc_min",0)/90.0)   # WC "games" = minutes/90
             for k in ("g90","a90","sot90","fc90","fd90"):
                 p[k]=w*club[k]+(1-w)*p[k]
-    cache[key]=pool; return pool
+    _cache_put(cache, key, pool); return pool
 
 # ---------------------------------------------------------------- odds (book prices)
 # Pull bookmaker odds, take the BEST price per selection across all books (line
