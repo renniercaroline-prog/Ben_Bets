@@ -48,26 +48,53 @@ def _now():
 
 # ----------------------------------------------------------------- settling
 def grade(group, label, home, away, gh, ga, corners):
-    """Did the selection win? True/False, or None if ungradeable (e.g. no corner data).
-    home/away are team names so we can read a '{team} win' label."""
+    """Did the selection win? True/False, or None if ungradeable (no data, or a
+    market we can't settle from the full-time score, e.g. first-half goals).
+    home/away are team names so we can read '{team} ...' labels."""
     if gh is None or ga is None:
         return None
     total = gh + ga
+    def ou(line_str, value):              # 'Over'/'Under' helper on a total
+        side, line = line_str.split(); line = float(line)
+        return value > line if side == "Over" else value < line
     if group == "Match result":
         win = home if gh > ga else (away if ga > gh else "Draw")
         return label == f"{win} win" or (label == "Draw" and win == "Draw")
-    if group == "Total goals":            # 'Over 2.5' / 'Under 2.5'
-        side, line = label.split(); line = float(line)
-        return total > line if side == "Over" else total < line
-    if group == "Both teams to score":    # 'Yes' / 'No'
+    if group == "Double chance":
+        if label == f"{home} or draw": return gh >= ga
+        if label == "Either team (no draw)": return gh != ga
+        if label == f"{away} or draw": return ga >= gh
+        return None
+    if group == "Total goals":
+        return ou(label, total)
+    if group == f"{home} total goals":
+        return ou(label, gh)
+    if group == f"{away} total goals":
+        return ou(label, ga)
+    if group == "Both teams to score":
         yes = gh > 0 and ga > 0
         return yes if label == "Yes" else (not yes)
+    if group == "Clean sheet":
+        if label == f"{home} yes": return ga == 0
+        if label == f"{away} yes": return gh == 0
+        return None
+    if group == "Win to nil":
+        if label == f"{home} yes": return gh > ga and ga == 0
+        if label == f"{away} yes": return ga > gh and gh == 0
+        return None
+    if group == "Correct score":
+        try:
+            i, j = map(int, label.split(":")); return gh == i and ga == j
+        except ValueError:
+            return None
     if group == "Corners" and label.startswith("Total "):
         if corners is None:
             return None
-        side, line = label[6:].split(); line = float(line)
-        return corners > line if side == "Over" else corners < line
-    return None                           # team-corner thresholds etc. not logged/graded
+        return ou(label[6:], corners)
+    return None                           # first-half / player props / team-corner thresholds
+
+
+
 
 # ----------------------------------------------------------------- main update
 def update_log(snapshots, results_fn, now=None):

@@ -186,6 +186,25 @@ def _odds_key(betname, value):
         return "btts:" + v.lower() if v in ("Yes", "No") else None
     if betname == "Corners Over Under":
         return "corners:" + v.lower().replace(" ", ":")        # 'Over 9.5' -> 'corners:over:9.5'
+    if betname == "Double Chance":
+        return {"Home/Draw": "dc:home_draw", "Home/Away": "dc:home_away",
+                "Draw/Away": "dc:draw_away"}.get(v)
+    if betname == "Total - Home":
+        return "th:" + v.lower().replace(" ", ":")              # 'Over 1.5' -> 'th:over:1.5'
+    if betname == "Total - Away":
+        return "ta:" + v.lower().replace(" ", ":")
+    if betname == "Clean Sheet - Home":
+        return "cs:home:" + v.lower() if v in ("Yes", "No") else None
+    if betname == "Clean Sheet - Away":
+        return "cs:away:" + v.lower() if v in ("Yes", "No") else None
+    if betname == "Win to Nil - Home":
+        return "wn:home:" + v.lower() if v in ("Yes", "No") else None
+    if betname == "Win to Nil - Away":
+        return "wn:away:" + v.lower() if v in ("Yes", "No") else None
+    if betname == "Goals Over/Under First Half":
+        return "fh:" + v.lower().replace(" ", ":")
+    if betname == "Exact Score":
+        return "exact:" + v                                    # '2:1' -> 'exact:2:1'
     return None
 
 def best_odds(resp):
@@ -218,22 +237,46 @@ def devig(best):
         elif key.startswith("ou:"):      groups["ou:" + key.split(":")[2]].append(key)      # per line
         elif key.startswith("btts:"):    groups["btts"].append(key)
         elif key.startswith("corners:"): groups["corners:" + key.split(":")[2]].append(key) # per line
+        elif key.startswith("th:"):      groups["th:" + key.split(":")[2]].append(key)
+        elif key.startswith("ta:"):      groups["ta:" + key.split(":")[2]].append(key)
+        elif key.startswith("fh:"):      groups["fh:" + key.split(":")[2]].append(key)
+        elif key.startswith("cs:"):      groups["cs:" + key.split(":")[1]].append(key)      # per team
+        elif key.startswith("wn:"):      groups["wn:" + key.split(":")[1]].append(key)
+        elif key.startswith("dc:"):      groups["dc"].append(key)
+        # exact scores aren't a clean partition (we keep only the top few) -> no de-vig
     prob = {}
-    for keys in groups.values():
+    for gname, keys in groups.items():
         imp = {k: 1.0 / best[k][0] for k in keys}
         s = sum(imp.values())
-        if s > 0:
-            for k in keys:
-                prob[k] = imp[k] / s
+        if s <= 0:
+            continue
+        divisor = s / 2 if gname == "dc" else s    # double chance covers 2 of 3 outcomes -> sums to ~2
+        for k in keys:
+            prob[k] = imp[k] / divisor
     return prob
 
 def _market_key(group, label, home, away):
     if group == "Match result":
         return {f"{home} win": "1x2:home", "Draw": "1x2:draw", f"{away} win": "1x2:away"}.get(label)
+    if group == "Double chance":
+        return {f"{home} or draw": "dc:home_draw", "Either team (no draw)": "dc:home_away",
+                f"{away} or draw": "dc:draw_away"}.get(label)
     if group == "Total goals":
         return "ou:" + label.lower().replace(" ", ":")
+    if group == f"{home} total goals":
+        return "th:" + label.lower().replace(" ", ":")
+    if group == f"{away} total goals":
+        return "ta:" + label.lower().replace(" ", ":")
     if group == "Both teams to score":
         return "btts:" + label.lower()
+    if group == "Clean sheet":
+        return {f"{home} yes": "cs:home:yes", f"{away} yes": "cs:away:yes"}.get(label)
+    if group == "Win to nil":
+        return {f"{home} yes": "wn:home:yes", f"{away} yes": "wn:away:yes"}.get(label)
+    if group == "Correct score":
+        return "exact:" + label
+    if group == "First-half goals":
+        return "fh:" + label.lower().replace(" ", ":")
     if group == "Corners" and label.startswith("Total "):
         return "corners:" + label[6:].lower().replace(" ", ":")
     return None

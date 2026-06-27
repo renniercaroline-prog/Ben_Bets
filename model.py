@@ -192,46 +192,93 @@ def lineup_strength(pool, side):
     dfn = min(DEF_CEIL, 1 + DEF_LINEUP_SENS * penalty)
     return atk, dfn
 
+# ---- more markets off the score matrix (all model-priced, bookmaker-matched) ----
+def _marginals(M):
+    rs = [sum(M[i][j] for j in range(GMAX+1)) for i in range(GMAX+1)]   # P(home scores i)
+    cs = [sum(M[i][j] for i in range(GMAX+1)) for j in range(GMAX+1)]   # P(away scores j)
+    return rs, cs
+
+def _over_marg(marg, line):
+    return float(sum(marg[k] for k in range(GMAX+1) if k > line))
+
+def player_groups(hp, ap, lh, la, home, away):
+    """Player props split into one group per prop type (instead of one big list),
+    each sorted most-likely-first. SoT scales with the opponent's shots-conceded rate."""
+    PROPS = [  # (group title, label suffix, rate keys, context kind)
+        ("Players — to score",         "to score",           ("g90",),       "atk"),
+        ("Players — shots on target",  "1+ shot on target",  ("sot90",),     "sot"),
+        ("Players — to score/assist",  "to score or assist", ("g90","a90"),  "atk"),
+        ("Players — to commit a foul", "to commit a foul",   ("fc90",),      "one"),
+        ("Players — to be fouled",     "to be fouled",       ("fd90",),      "one"),
+    ]
+    sides = [(hp, lh, away.get("sot_con", 1.0)), (ap, la, home.get("sot_con", 1.0))]
+    groups = []
+    for title, suffix, keys, kind in PROPS:
+        rows = []
+        for players, team_xg, opp_sot in sides:
+            ctx = {"atk": team_xg / MU_GOALS, "sot": opp_sot, "one": 1.0}[kind]
+            for p in players:
+                m = p.get("min", 0)
+                if m <= 0:
+                    continue
+                rate = sum(p[k] for k in keys)
+                rows.append({"player": p["name"], "label": f"{p['name']} {suffix}",
+                             "p": round(_p_at_least_one(rate, m, ctx), 3)})
+        if rows:
+            groups.append({"name": title, "markets": sorted(rows, key=lambda x: -x["p"])})
+    return groups
+
 # ---------------------------------------------------------------- assemble
 def build_fixture(home, away, hp, ap, agent_note=""):
     """home/away: team ratings. hp/ap: player lists w/ projected minutes."""
+    H, A = home["name"], away["name"]
     lh, la = goals(home, away)
     ch = team_corners(home, away,  la-lh)
     ca = team_corners(away, home,  lh-la)
     M  = score_matrix(lh, la)                      # DC-corrected; all FT markets read off it
+    M1 = score_matrix(lh*H1_SHARE, la*H1_SHARE)    # first-half scoreline grid
     hP, dP, aP = match_result(M)
     bts = btts_m(M)
     hf = htft(lh, la)
     h1h, h1d, h1a = half_result(lh, la)
+    rs, cs = _marginals(M)
+    csh = sum(M[i][0] for i in range(GMAX+1))      # home clean sheet (away scores 0)
+    csa = sum(M[0][j] for j in range(GMAX+1))      # away clean sheet (home scores 0)
+    wnh = sum(M[i][0] for i in range(1, GMAX+1))   # home win to nil
+    wna = sum(M[0][j] for j in range(1, GMAX+1))   # away win to nil
+    scores = sorted(((M[i][j], i, j) for i in range(GMAX+1) for j in range(GMAX+1)), reverse=True)[:7]
 
     def mk(label, p): return {"label": label, "p": round(p, 3)}
     def ou(prefix, line, p_over):                  # both sides of an over/under line
         return [mk(f"{prefix}Over {line}", p_over), mk(f"{prefix}Under {line}", 1 - p_over)]
 
-    goal_lines   = [m for l in (0.5,1.5,2.5,3.5,4.5) for m in ou("", l, over_under_m(M, l))]
-    corner_lines = [m for l in (7.5,8.5,9.5,10.5)    for m in ou("Total ", l, total_corners_over(ch, ca, l))]
-
     groups = [
         {"name": "Match result", "markets": [
-            mk(f"{home['name']} win", hP), mk("Draw", dP), mk(f"{away['name']} win", aP)]},
-        {"name": "Total goals", "markets": goal_lines},      # Over AND Under each line
-        {"name": "Both teams to score", "markets": [
-            mk("Yes", bts), mk("No", 1-bts)]},
+            mk(f"{H} win", hP), mk("Draw", dP), mk(f"{A} win", aP)]},
+        {"name": "Double chance", "markets": [
+            mk(f"{H} or draw", hP+dP), mk("Either team (no draw)", hP+aP), mk(f"{A} or draw", dP+aP)]},
+        {"name": "Total goals", "markets":
+            [m for l in (0.5,1.5,2.5,3.5,4.5) for m in ou("", l, over_under_m(M, l))]},
+        {"name": f"{H} total goals", "markets":
+            [m for l in (0.5,1.5,2.5) for m in ou("", l, _over_marg(rs, l))]},
+        {"name": f"{A} total goals", "markets":
+            [m for l in (0.5,1.5,2.5) for m in ou("", l, _over_marg(cs, l))]},
+        {"name": "Both teams to score", "markets": [mk("Yes", bts), mk("No", 1-bts)]},
+        {"name": "Clean sheet", "markets": [mk(f"{H} yes", csh), mk(f"{A} yes", csa)]},
+        {"name": "Win to nil", "markets": [mk(f"{H} yes", wnh), mk(f"{A} yes", wna)]},
+        {"name": "Correct score", "markets": [mk(f"{i}:{j}", p) for p, i, j in scores]},
         {"name": "First-half result", "markets": [
-            mk(f"{home['name']} lead", h1h), mk("Level", h1d), mk(f"{away['name']} lead", h1a)]},
+            mk(f"{H} lead", h1h), mk("Level", h1d), mk(f"{A} lead", h1a)]},
+        {"name": "First-half goals", "markets":
+            [m for l in (0.5,1.5,2.5) for m in ou("", l, over_under_m(M1, l))]},
         {"name": "Half-time / Full-time", "markets": [
-            mk(k.replace("H", home['name'][:3]).replace("A", away['name'][:3]).replace("D","Draw"), v)
-            for k, v in sorted(hf.items(), key=lambda x:-x[1])[:6]]},   # top 6 most likely
+            mk(k.replace("H", H[:3]).replace("A", A[:3]).replace("D","Draw"), v)
+            for k, v in sorted(hf.items(), key=lambda x:-x[1])[:6]]},
         {"name": "Corners", "markets": (
-            corner_lines +                                   # total Over AND Under each line
-            [mk(f"{away['name']} {k}+", team_corner_tail(ca, k)) for k in (3,4,5)] +
-            [mk(f"{home['name']} {k}+", team_corner_tail(ch, k)) for k in (4,5,6)])},
-        {"name": "Players", "markets":
-            # a player's SoT volume scales with the OPPONENT's shots-conceded rate
-            # (sot_con, 1.0 = league average; absent -> no adjustment)
-            player_markets(hp, lh, away.get("sot_con", 1.0)) +
-            player_markets(ap, la, home.get("sot_con", 1.0))},
-    ]
-    return {"home": home["name"], "away": away["name"],
+            [m for l in (7.5,8.5,9.5,10.5) for m in ou("Total ", l, total_corners_over(ch, ca, l))] +
+            [mk(f"{A} {k}+", team_corner_tail(ca, k)) for k in (3,4,5)] +
+            [mk(f"{H} {k}+", team_corner_tail(ch, k)) for k in (4,5,6)])},
+    ] + player_groups(hp, ap, lh, la, home, away)
+    return {"home": H, "away": A,
             "xg": [round(lh,2), round(la,2)], "corners": [round(ch,1), round(ca,1)],
             "agent_note": agent_note, "groups": groups}

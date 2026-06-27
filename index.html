@@ -79,6 +79,12 @@
   .trow span{color:var(--sage)}
   .trow b{font-family:var(--mono);font-size:14px}
   .pos{color:var(--gold)} .neg{color:var(--red)}
+  .gamebest{background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:8px 11px;margin:8px 0}
+  .gbhead{color:var(--gold);font-weight:600;font-size:12px;margin-bottom:2px;display:flex;justify-content:space-between;align-items:baseline}
+  .gbhead .bsub{color:var(--sage);font-weight:400}
+  .gbrow{display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:center;padding:5px 0;border-top:1px solid var(--line);font-size:12px}
+  .gbrow .gblab small{color:var(--sage);font-family:var(--mono);font-size:10px;margin-left:6px}
+  .gbnum{font-family:var(--mono);color:var(--chalk);font-size:12px;text-align:right}
 </style>
 </head>
 <body>
@@ -775,6 +781,16 @@ function renderTrack(){
     +`<span class="bsub">${t.logged} flagged · ${t.open} open</span></div>${rows}`
     +`<div class="bnote" style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px">${note}</div></div>`;
 }
+// Per-game best value: every priced market in THIS game, sorted by edge (looser
+// than the top board — drops only the wildest model-vs-market mismatches).
+function gameBest(f){
+  const picks=[];
+  f.groups.forEach(g=>g.markets.forEach(m=>{
+    if(m.ev==null||m.mkt_p==null) return;
+    if(m.ev>=0.02 && m.p/m.mkt_p<=2.0) picks.push({g,m});
+  }));
+  return picks.sort((a,b)=>b.m.ev-a.m.ev).slice(0,6);
+}
 function render(){
   document.getElementById('updated').textContent = DATA.updated==='sample'?'':'Updated '+fmt(DATA.updated);
   document.getElementById('banner').innerHTML = DATA.sample
@@ -784,12 +800,19 @@ function render(){
   const root = document.getElementById('fixtures'); root.innerHTML='';
   DATA.fixtures.forEach((f, fi) => {
     const el = document.createElement('div'); el.className='fixture';
+    const gb=gameBest(f);
+    const gbHtml = gb.length ? `<div class="gamebest">
+      <div class="gbhead"><span>★ Best value in this game</span><span class="bsub">sorted by edge</span></div>
+      ${gb.map(p=>`<div class="gbrow"><span class="gblab">${p.m.label}<small>${p.g.name}</small></span>`
+        +`<span class="gbnum">${pct(p.m.p)} · ${p.m.odd} ${p.m.book||''}</span>`
+        +`<span class="tag val">+${(p.m.ev*100).toFixed(0)}%</span></div>`).join('')}</div>` : '';
     el.innerHTML =
       `<div class="teams">${f.home} <span style="color:var(--sage)">v</span> ${f.away}</div>
        <div class="kick">${fmt(f.kickoff)}</div>
        <div class="modelline"><span>xG <b>${f.xg[0]} – ${f.xg[1]}</b></span>
          <span>corners <b>${f.corners[0]} – ${f.corners[1]}</b></span></div>
-       ${f.agent_note?`<div class="agent"><span class="ai">AGENT</span><span>${f.agent_note}</span></div>`:''}`;
+       ${f.agent_note?`<div class="agent"><span class="ai">AGENT</span><span>${f.agent_note}</span></div>`:''}
+       ${gbHtml}`;
     f.groups.forEach((g, gi) => {
       const d = document.createElement('details'); if(OPEN[gi]) d.open=true;
       const s = document.createElement('summary');
