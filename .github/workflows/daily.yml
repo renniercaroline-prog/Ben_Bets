@@ -31,6 +31,6 @@ jobs:
         run: |
           git config user.name  "wc-edge-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add data.json cache.json
+          git add data.json cache.json clv_log.json
           git commit -m "daily update $(date -u +%F)" || echo "no changes"
           git push

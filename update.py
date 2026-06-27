@@ -6,7 +6,7 @@ data so the page renders end to end.
 """
 import os, json, datetime, urllib.request
 from collections import defaultdict
-import model, agent, elo, xg
+import model, agent, elo, xg, clv
 
 API_KEY   = os.environ.get("API_FOOTBALL_KEY", "").strip()
 BASE      = "https://v3.football.api-sports.io"
@@ -231,6 +231,25 @@ def attach_odds(fo, best, fair):
                 if key in fair:
                     m["mkt_p"] = round(fair[key], 3)           # market's fair prob, for context
 
+def _result(fid):
+    """For CLV settling: final status/score/corners of a (usually finished) fixture."""
+    try:
+        r=api(f"/fixtures?id={fid}")
+        if not r: return None
+        f=r[0]; st=f["fixture"]["status"]["short"]
+        gh,ga=f["goals"]["home"],f["goals"]["away"]
+        corners=None
+        if st in ("FT","AET","PEN"):
+            tot=0; got=False
+            for side in api(f"/fixtures/statistics?fixture={fid}"):
+                for s in side["statistics"]:
+                    if s["type"]=="Corner Kicks" and s["value"] is not None:
+                        tot+=s["value"]; got=True
+            corners=tot if got else None
+        return (st,gh,ga,corners)
+    except Exception:
+        return None
+
 def build_live():
     cache={}
     if os.path.exists("cache.json"): cache=json.load(open("cache.json"))
@@ -274,7 +293,7 @@ def build_live():
         blended["sot_con"]=form.get("sot_con",1.0)   # carry through for §2.2 opponent SoT adj
         return blended
 
-    out=[]
+    out=[]; snapshots=[]
     for f in games:
         h,a=f["teams"]["home"],f["teams"]["away"]; ko=f["fixture"]["date"]
         hp_pool=player_pool(h["id"],cache); ap_pool=player_pool(a["id"],cache)
@@ -295,8 +314,21 @@ def build_live():
             attach_odds(fo,od,devig(od))
         except Exception as e:
             print(f"   (odds skipped for {h['name']} v {a['name']}: {e})")
+        # snapshot the board's candidate bets for the CLV log (keyed by fixture id)
+        for g in fo["groups"]:
+            for m in g["markets"]:
+                if clv.is_candidate(m):
+                    snapshots.append({"fid":f["fixture"]["id"],"home":fo["home"],"away":fo["away"],
+                        "kickoff":ko,"group":g["name"],"label":m["label"],"p":m["p"],
+                        "odd":m["odd"],"book":m["book"],"mkt_p":m["mkt_p"],"ev":m["ev"]})
         out.append(fo)
     out.sort(key=lambda o:o["kickoff"])              # §4.2 soonest kickoff first
+    # CLV: open/roll candidate prices and settle fixtures that have kicked off
+    try:
+        log=clv.update_log(snapshots,_result)
+        print(f"   CLV log: {len(snapshots)} candidates snapshotted, {len(log)} total tracked")
+    except Exception as e:
+        print(f"   (CLV log skipped: {e})")
     json.dump(cache,open("cache.json","w"))
     return out,False
 
