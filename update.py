@@ -206,6 +206,10 @@ def _odds_key(betname, value):
         return "wn:away:" + v.lower() if v in ("Yes", "No") else None
     if betname == "Goals Over/Under First Half":
         return "fh:" + v.lower().replace(" ", ":")
+    if betname == "Goals Over/Under - Second Half":
+        return "sh:" + v.lower().replace(" ", ":")
+    if betname == "Second Half Winner":
+        return {"Home": "shw:home", "Draw": "shw:draw", "Away": "shw:away"}.get(v)
     if betname == "Exact Score":
         return "exact:" + v                                    # '2:1' -> 'exact:2:1'
     return None
@@ -243,6 +247,8 @@ def devig(best):
         elif key.startswith("th:"):      groups["th:" + key.split(":")[2]].append(key)
         elif key.startswith("ta:"):      groups["ta:" + key.split(":")[2]].append(key)
         elif key.startswith("fh:"):      groups["fh:" + key.split(":")[2]].append(key)
+        elif key.startswith("sh:"):      groups["sh:" + key.split(":")[2]].append(key)
+        elif key.startswith("shw:"):     groups["shw"].append(key)
         elif key.startswith("cs:"):      groups["cs:" + key.split(":")[1]].append(key)      # per team
         elif key.startswith("wn:"):      groups["wn:" + key.split(":")[1]].append(key)
         elif key.startswith("dc:"):      groups["dc"].append(key)
@@ -280,6 +286,10 @@ def _market_key(group, label, home, away):
         return "exact:" + label
     if group == "First-half goals":
         return "fh:" + label.lower().replace(" ", ":")
+    if group == "Second-half goals":
+        return "sh:" + label.lower().replace(" ", ":")
+    if group == "Second-half result":
+        return {f"{home} lead": "shw:home", "Level": "shw:draw", f"{away} lead": "shw:away"}.get(label)
     if group == "Corners" and label.startswith("Total "):
         return "corners:" + label[6:].lower().replace(" ", ":")
     return None

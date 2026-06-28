@@ -237,10 +237,12 @@ def build_fixture(home, away, hp, ap, agent_note=""):
     ca = team_corners(away, home,  lh-la)
     M  = score_matrix(lh, la)                      # DC-corrected; all FT markets read off it
     M1 = score_matrix(lh*H1_SHARE, la*H1_SHARE)    # first-half scoreline grid
+    M2 = score_matrix(lh*(1-H1_SHARE), la*(1-H1_SHARE))  # second-half scoreline grid
     hP, dP, aP = match_result(M)
     bts = btts_m(M)
     hf = htft(lh, la)
     h1h, h1d, h1a = half_result(lh, la)
+    h2h, h2d, h2a = match_result(M2)
     rs, cs = _marginals(M)
     csh = sum(M[i][0] for i in range(GMAX+1))      # home clean sheet (away scores 0)
     csa = sum(M[0][j] for j in range(GMAX+1))      # away clean sheet (home scores 0)
@@ -271,6 +273,10 @@ def build_fixture(home, away, hp, ap, agent_note=""):
             mk(f"{H} lead", h1h), mk("Level", h1d), mk(f"{A} lead", h1a)]},
         {"name": "First-half goals", "markets":
             [m for l in (0.5,1.5,2.5) for m in ou("", l, over_under_m(M1, l))]},
+        {"name": "Second-half result", "markets": [
+            mk(f"{H} lead", h2h), mk("Level", h2d), mk(f"{A} lead", h2a)]},
+        {"name": "Second-half goals", "markets":
+            [m for l in (0.5,1.5,2.5) for m in ou("", l, over_under_m(M2, l))]},
         {"name": "Half-time / Full-time", "markets": [
             mk(k.replace("H", H[:3]).replace("A", A[:3]).replace("D","Draw"), v)
             for k, v in sorted(hf.items(), key=lambda x:-x[1])[:6]]},
