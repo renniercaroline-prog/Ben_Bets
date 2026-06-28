@@ -123,22 +123,33 @@ def update_log(snapshots, results_fn, now=None):
         elif r["status"] == "open":
             r.update(close_odds=s["odd"], close_book=s["book"], close_ts=now, model_p=s["p"])
 
-    # 2) close + settle anything that has kicked off since we last looked
+    # 2) close kicked-off bets, AND settle any closed bet still awaiting a result.
+    # A bet closes the instant its fixture leaves the upcoming window — at which point
+    # the game is usually only in-play, not finished — so settlement must be retried on
+    # later runs once the final score is in. (The old code only touched 'open' records,
+    # so nothing ever settled.) results_fn is memoised per fixture to avoid duplicate calls.
+    rcache = {}
+    def result_of(fid):
+        if fid not in rcache:
+            rcache[fid] = results_fn(fid) if results_fn else None
+        return rcache[fid]
     for key, r in log.items():
-        if r["status"] != "open":
-            continue
         fid = int(key.split("|")[0])
-        if fid in current:                # still upcoming — keep rolling
-            continue
-        r["status"] = "closed"
-        if r["open_odds"] and r["close_odds"]:
-            r["clv"] = round(r["open_odds"] / r["close_odds"] - 1, 4)   # +ve = beat the close
-        res = results_fn(fid) if results_fn else None
-        if res and res[0] in ("FT", "AET", "PEN"):
-            won = grade(r["group"], r["label"], r["home"], r["away"], res[1], res[2], res[3])
-            if won is not None:
-                r["result"] = "win" if won else "lose"
-                r["pnl"] = round(r["open_odds"] - 1 if won else -1, 3)  # 1 unit flat at our price
+        if r["status"] == "open":
+            if fid in current:            # still upcoming — keep rolling the close price
+                continue
+            r["status"] = "closed"        # kicked off
+            if r["open_odds"] and r["close_odds"]:
+                r["clv"] = round(r["open_odds"] / r["close_odds"] - 1, 4)   # +ve = beat the close
+        if r["status"] == "closed" and r.get("result") is None:
+            res = result_of(fid)
+            if res and res[0] in ("FT", "AET", "PEN"):
+                won = grade(r["group"], r["label"], r["home"], r["away"], res[1], res[2], res[3])
+                if won is None:
+                    r["result"] = "void"  # finished but this market can't be graded from the FT score
+                else:
+                    r["result"] = "win" if won else "lose"
+                    r["pnl"] = round(r["open_odds"] - 1 if won else -1, 3)  # 1 unit flat at our price
     save(log)
     return log
 
@@ -154,7 +165,7 @@ def summary_dict(log=None):
     moved = [r for r in recs if r.get("clv") is not None and r.get("open_ts") != r.get("close_ts")]
     single = sum(1 for r in recs if r.get("clv") is not None and r.get("open_ts") == r.get("close_ts"))
     clv = [r["clv"] for r in moved]
-    settled = [r for r in recs if r.get("result")]
+    settled = [r for r in recs if r.get("result") in ("win", "lose")]
     wins = sum(1 for r in settled if r["result"] == "win")
     pnl = sum(r["pnl"] for r in settled if r.get("pnl") is not None)
     return {
@@ -175,7 +186,7 @@ def summary(log=None):
     moved = [r for r in recs if r.get("clv") is not None and r.get("open_ts") != r.get("close_ts")]
     single = sum(1 for r in recs if r.get("clv") is not None and r.get("open_ts") == r.get("close_ts"))
     clv = [r["clv"] for r in moved]
-    settled = [r for r in recs if r.get("result")]
+    settled = [r for r in recs if r.get("result") in ("win", "lose")]
     print("=" * 64)
     print(f"CLV SCOREBOARD — {len(recs)} logged ({len(openn)} open, {len(clv)} with a real "
           f"open→close, {single} logged too late to measure)")
