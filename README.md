@@ -1,4 +1,4 @@
-# WC Edge — a self-validating football betting model
+# World Cup Betting Model
 
 A static, self-updating web app that prices betting markets for the 2026 FIFA World Cup,
 compares its probabilities against live bookmaker odds, and **measures whether it actually
