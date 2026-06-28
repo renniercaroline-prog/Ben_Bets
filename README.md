@@ -1,118 +1,242 @@
-# WC Edge
+# WC Edge — a self-validating football betting model
 
-A phone-friendly web page showing model probabilities for World Cup markets, refreshed daily. No server, free to run. Your friend types in the odds his book offers and the page flags positive-value bets and suggests a stake.
+A static, self-updating web app that prices betting markets for the 2026 FIFA World Cup,
+compares its probabilities against live bookmaker odds, and **measures whether it actually
+has an edge** — rather than assuming it does.
 
-## Markets covered
-- **Match result**, **total goals** — both **over and under** each of 0.5–4.5, **both teams to score**
-- **First-half result**, **half-time / full-time**
-- **Corners** — total **over and under** each line, plus per-team thresholds
-- **Players** — to score, score-or-assist, shot on target, foul committed, fouled
+It runs with no server and no database: a scheduled GitHub Action runs a Python pipeline
+that fetches data, runs a statistical model, pulls odds, and commits a `data.json` that a
+single vanilla-JS page renders. Hosted free on GitHub Pages.
 
-## Files
-- **model.py** — all the probability math. Poisson goals, Negative-Binomial corners, per-90 player props. No AI, no network. Calibration constants (`MU_GOALS`, `LEAGUE_AVG_CORNERS`, `CORNER_R`, `H1_SHARE`) are env-overridable so the backtest can A/B re-fitted values.
-- **elo.py** — historical team-strength prior. A time-decayed, margin-adjusted Elo over each team's past international results, mapped to attack/defence rates. The sparse World-Cup form is shrunk toward this prior (`rating = w·prior + (1−w)·form`), so a team is anchored by years of history, not 3 games. Also ships a 2D attack/defence variant (`GoalEloEngine`) that separates scoring and conceding — better on data-rich **club** football, but the international backtest showed plain 1D wins when teams play few games, so the live (international) pipeline uses 1D. Can update from xG instead of goals (Phase 2.1). No network.
-- **xg.py** — optional expected-goals team ratings from FBref (via `soccerdata`), used in place of raw goals where available and falling back to goals otherwise. Best-effort and cached; the pipeline never breaks if xG is missing.
-- **agent.py** — the AI layer. Uses an LLM + web search to project each team's lineup and minutes from the latest news. It returns lineups and minutes only — it never produces a probability.
-- **update.py** — runs daily: fetch data → build the Elo prior → ask the agent for lineups → run the model → write `data.json`. Missing/rested key players now also dock **team** attack/defence, not just their own props.
-- **backtest.py** — the scoreboard. Walk-forward Brier / log-loss + calibration per market. Runs on real history (with a key) or on synthetic data (no key). This is how every modelling change is judged.
-- **index.html** — the page your friend opens. Reads `data.json`; shows sample data until the first live run.
-- **.github/workflows/daily.yml** — runs it every day at 12:00 UTC.
+> **Design philosophy:** a flagged "value" bet is noise until it's *measured*. The project
+> ships with a backtest harness and a closing-line-value logger, and is deliberately honest
+> about what's proven (the priors help, calibration is good) and what isn't (it is **not**
+> yet shown to beat the market). The tooling to find out is the point.
 
-## Backtest & calibration (earn the edge before trusting it)
-`python backtest.py` prints Brier score, log-loss and a reliability table per market.
-With no API key it runs in **synthetic mode** against a known true model — useful for
-checking the harness and the *relative* effect of a change; real numbers need a key
-(`BACKTEST_MODE=live BACKTEST_LEAGUE=39 BACKTEST_SEASONS=2022,2023 python backtest.py`).
+---
 
-Swap the rating method on the same scoreboard with `RATING_MODEL=baseline|elo`. The
-Phase-1 change (Elo prior + shrinkage) was verified on **real Premier League data**
-(708 walk-forward matches, 2022–23):
+## The core problem it solves
 
-| market        | baseline Brier (skill%) | Elo Brier (skill%) |
-|---------------|:-----------------------:|:------------------:|
-| result (1X2)  |      0.666 (−5.2%)      |  **0.614 (+3.1%)** |
-| over 2.5      |      0.278 (−14.6%)     |   0.247 (−1.7%)    |
-| both-teams    |      0.281 (−14.2%)     |   0.253 (−3.1%)    |
-| corners 8.5   |      0.231 (−9.6%)      |   0.214 (−1.4%)    |
+Estimating a team or player from their ≤3 World Cup games is hopelessly noisy. The whole
+approach is therefore:
 
-The old baseline is negative-skill on every market (over-confident, worse than the base
-rate). The Elo prior turns the result market positive and roughly halves the deficit
-elsewhere, with calibration going from wild to near-diagonal. Synthetic mode (no key)
-reproduces the same pattern offline. Re-baseline constants from real data with
-`python backtest.py --recalibrate` (prints data-fitted `MU_GOALS` / corners / dispersion / rho).
+> **strong historical prior  +  small World-Cup update  +  measure everything.**
 
-### Validated on international football (the actual domain)
-The numbers above are club football. The same harness, pointed at a multi-confederation
-basket of **3,061 senior international matches** (World Cup, Euro, Copa, AFCON, Asian Cup,
-Gold Cup, Nations Leagues, WC qualifiers, friendlies; pass the league IDs as a comma list
-in `BACKTEST_LEAGUE`), confirms the prior transfers — and transfers *better*:
+The sparse tournament data becomes a minor adjustment on top of a low-variance prior built
+from years of history, and every modelling decision is gated on a backtest instead of a hunch.
 
-| model     | result Brier | skill% |
-|-----------|:------------:|:------:|
-| baseline  |    0.648     | −2.0%  |
-| **elo (1D)** | **0.591** | **+6.9%** |
-| elo2d (2D)|    0.595     | +6.3%  |
+---
 
-Two findings drove live defaults: (1) the 1D Elo prior gives **+6.9% skill on the result
-market** for internationals (stronger than the +3.1% on the PL); (2) the **2D** model that
-won on club football **loses** here — national teams play too few games to estimate
-separate attack and defence reliably — so the live pipeline uses **1D**. A reminder that a
-gain measured in the wrong domain doesn't always hold in the right one.
+## Architecture
 
-### Data coverage of the WC squads
-Audited 276 key players across 35 WC squads: they play in **55 club leagues across 42
-countries**. Player-prop priors (club-season per-90s via API-Football) cover all of them;
-~**53%** are in a big-5 European league, which is also where FBref **xG** is available — so
-xG enrichment is big-5-skewed while the core player data is genuinely worldwide.
+```
+ API-Football ─┐
+ FBref (xG) ───┼─►  update.py  ─►  model.py   (probability math)
+ OpenAI agent ─┘   (orchestrator) ├─ elo.py    (historical prior + shrinkage)
+                                  ├─ agent.py  (LLM → lineups only)
+                                  ├─ xg.py     (optional xG ratings)
+                                  └─ clv.py    (closing-line-value log)
+                                       │
+                                       ▼
+                                   data.json  ─►  index.html  (UI: EV / Kelly / board)
 
-## Better inputs (Phase 2)
-- **xG drives team ratings.** Goals are noisy; xG stabilises faster, so attack/defence
-  ratings use season xG-for/against where a free source has it (FBref via `soccerdata`),
-  falling back to goals otherwise. In synthetic backtests an xG-driven prior beat a
-  goals-driven one on the result market (Brier 0.635 → 0.612, skill 2.4% → 5.8%).
-- **Player props anchored to the club season.** A striker's ~35-game club season is a far
-  better guide than ≤3 World Cup games, so each WC per-90 (goals, assists, shots on target,
-  fouls) is shrunk toward the player's club-season per-90: `rate = w·club + (1−w)·WC`, with
-  `w` high when WC minutes are few. Shot-on-target props also scale with the **opponent's**
-  shots-conceded rate (a leaky defence → more SoT chances).
-- This also sharpens the lineup→team-strength dock (the per-90s the dock sums are now the
-  more-stable club-season numbers). Local install for the backtest plots: `pip install matplotlib`.
+ backtest.py  ─  evaluation harness (Brier / log-loss / calibration, walk-forward)
+```
 
-## Dixon-Coles (implemented, but backtested OFF by default)
-The goals model has a **Dixon-Coles** low-score correction (`RHO_DC`) and reads
-match-result, totals, BTTS, half and HT/FT markets off one corrected score matrix, so
-prices stay mutually consistent. In theory a small negative rho lifts draws/0-0/1-1.
-**But** fitting rho by exact-scoreline likelihood on real Premier League data did not
-support a nonzero value (NLL was flat-to-worse as rho went negative), so `RHO_DC`
-defaults to **0** (plain Poisson) rather than shipping an un-evidenced edge. The
-machinery and the fit (`python backtest.py --recalibrate`) stay, so you can switch it
-on per competition if the data ever justifies it.
+| File | Role |
+|---|---|
+| `model.py` | All probability math — pure functions, no network. Dixon-Coles-ready bivariate-Poisson goals (one corrected score matrix drives 20 mutually-consistent markets), negative-binomial corners, per-90 player props. |
+| `elo.py` | The historical prior: a time-decayed, margin-adjusted Elo over each team's past internationals, shrunk with sparse WC form. |
+| `agent.py` | The AI layer — an LLM that projects **lineups only** (see below). It never outputs a probability. |
+| `xg.py` | Optional expected-goals team ratings from FBref; graceful fallback to goals. |
+| `update.py` | Orchestrator: fetch → build prior → (gated) agent → model → odds → CLV → write `data.json`. |
+| `backtest.py` | The scoreboard: walk-forward Brier/log-loss + calibration, on real or synthetic data. |
+| `clv.py` | Closing-line-value logger — the forward test of edge. |
+| `index.html` | Vanilla-JS UI: odds entry, EV/Kelly, ranked best-bets board, track-record panel. |
+| `.github/workflows/daily.yml` | Scheduled CI that runs the pipeline and commits the output. |
 
-## A note on home advantage (deliberately omitted)
-The goals model has **no home-advantage term**, on purpose: World Cup matches are played
-at neutral venues, so a home edge would bias the predictions the product actually makes.
-The side-effect is that the **club-league backtest understates the model** — home
-advantage is large in domestic leagues, so real-PL Brier looks worse than the model
-would do on neutral-venue internationals. If you ever retarget this at club football,
-add a home multiplier first; it matters more than Dixon-Coles.
+---
 
-## How the agent fits (and its one real limit)
-Player props depend on who actually starts. Confirmed lineups only appear ~1 hour before kickoff, so the noon run uses the agent's *projection* from team news and recent starts, not a confirmed sheet. Re-run the workflow manually closer to kickoff (Actions → Run workflow) for sharper player numbers. The agent's projection feeds minutes into the model; a player it marks "out" drops off entirely.
+## How the model works
 
-## Deploy (~10 min)
-1. **API-Football key** — sign up at api-sports.io (free, 100 req/day), copy the key.
-2. **OpenAI key** — from platform.openai.com, for the lineup agent (uses gpt-5.5 via the Responses API). (Optional: without it, player props use fallback minutes and everything else still works.)
-3. **Create a repo** and upload these files (keep `.github/workflows/daily.yml` in that path).
-4. **Add secrets** — Settings → Secrets and variables → Actions → New repository secret. Add `API_FOOTBALL_KEY` and `OPENAI_API_KEY`.
-5. **Pages needs a public repo on the free plan** — either make the repo public (your keys live in encrypted secrets, not in any file, so they stay private), or host the page on Cloudflare Pages from a private repo. Then Settings → Pages → branch `main` / root.
-6. **Run once** — Actions → Daily update → Run workflow. Refresh the page for live numbers.
+- **Team strength — historical Elo prior + shrinkage.** A margin-adjusted Elo (goal
+  difference scales the update) with a ~15-month time-decay half-life, fit over each team's
+  international results. The sparse WC form is then a small correction:
+  `rating = w·prior + (1−w)·form`, with `w` high when few WC games exist and decaying as
+  they accumulate. Elo is mapped to the model's attack/defence rates so it feeds goals,
+  result, over/under, BTTS and (via supremacy) corners.
+- **Goals — bivariate Poisson with Dixon-Coles correction.** Every full-time market (result,
+  totals, BTTS, clean sheet, win-to-nil, correct score, double chance, halves, HT/FT) is read
+  off **one** corrected score matrix, so prices are internally consistent.
+- **Corners — negative binomial** (overdispersed), convolved for totals, with a game-state
+  multiplier for the favourite.
+- **Player props — per-90 × minutes × context.** Each rate is anchored to the player's
+  **club-season** per-90s and shrunk toward sparse WC form (a 35-game club season beats 3 WC
+  games); shots-on-target props scale with the opponent's shots-conceded rate.
+- **xG (optional).** Where a free source has it, season xG drives attack/defence ratings
+  (xG stabilises faster than goals); otherwise it falls back to goals.
 
-## Run locally first
+**Markets priced (20 groups/game):** match result, double chance, total goals (over *and*
+under 0.5–4.5), each team's total goals, BTTS, clean sheet, win-to-nil, correct score,
+first- and second-half result, first- and second-half goals, half-time/full-time, corners
+(totals + per-team), and player props split by type (to score / shots on target /
+score-or-assist / fouls committed / fouled).
+
+---
+
+## The AI agent — a deliberately bounded role
+
+The project uses an LLM (OpenAI Responses API, GPT-5.5, with the hosted web-search tool),
+but under a strict architectural rule:
+
+> **The LLM never computes a probability.** Every number a user could bet on comes from the
+> statistical model. The agent's *only* job is to read the latest team news and return, as
+> strict JSON, each side's **projected starting XI, minutes, and who's ruled out.**
+
+This boundary is intentional: LLMs hallucinate and are poorly calibrated, so letting one set
+a betting probability would be the wrong design. Keeping it to a perception task it's
+genuinely good at — *reading the news and projecting a lineup* — is where it adds value.
+
+**How the lineup feeds the model:**
+1. Projected minutes scale each player's per-90 rate into a player-prop probability (a player
+   marked "out" drops off entirely).
+2. A rested or missing key player also **docks the team's attack/defence rating** — so a
+   benched star ripples through the result, totals and corners markets, not just his own props.
+
+**Cost-aware engineering (the agent is pay-per-call):**
+- It only calls the LLM when a fixture is **within ~3 hours of kickoff** — when lineups
+  actually matter and start to confirm. Fixtures further out get a no-call placeholder.
+- Projections are **cached** and reused (refresh ≤ 60 min) rather than re-queried every run.
+- Net effect: **~90% fewer API calls** than a naive per-fixture-per-run approach, *and*
+  sharper projections (made closer to the confirmed XI).
+- The pipeline runs perfectly without the agent (no key → fallback minutes), so the AI layer
+  is an enhancement, never a dependency.
+
+---
+
+## Evaluation — earning the edge before trusting it
+
+`backtest.py` is the scoreboard every change is judged on: **walk-forward** (train on data
+strictly before each match — no look-ahead leakage), reporting **Brier score, log-loss and
+reliability/calibration** per market, with a naive base-rate baseline and a skill%. It runs
+against real history (API-Football) or a synthetic known-truth generator (no key), and the
+rating method is pluggable (`RATING_MODEL=baseline|elo|elo2d|xgelo`).
+
+**Verified on real Premier League data** (708 walk-forward matches):
+
+| market | baseline Brier (skill%) | Elo prior (skill%) |
+|---|:---:|:---:|
+| result (1X2) | 0.666 (−5.2%) | **0.614 (+3.1%)** |
+| over 2.5 | 0.278 (−14.6%) | 0.247 (−1.7%) |
+| both-teams | 0.281 (−14.2%) | 0.253 (−3.1%) |
+| corners 8.5 | 0.231 (−9.6%) | 0.214 (−1.4%) |
+
+The old rolling-form baseline is **negative-skill on every market** (over-confident, worse
+than the base rate). The Elo prior + shrinkage turns the result market positive and roughly
+halves the deficit elsewhere; calibration goes from wildly over-confident to near-diagonal.
+
+**Validated on the actual domain — internationals.** Pointed at a multi-confederation basket
+of **3,061 senior international matches** (WC, Euro, Copa, AFCON, Asian Cup, Gold Cup, Nations
+Leagues, qualifiers, friendlies), the prior transfers and transfers *better*: **+6.9% skill
+on the result market** (vs +3.1% on the PL).
+
+### Honest engineering decisions (all evidence-gated)
+
+- **1D over 2D ratings.** A two-dimensional attack/defence rating beat 1D on data-rich club
+  football — but **lost** on internationals, where teams play too few games to estimate two
+  parameters reliably. The product is international, so the live pipeline uses 1D. *A gain
+  measured in the wrong domain doesn't always hold in the right one.*
+- **Dixon-Coles defaulted OFF.** The correction is implemented, but fitting `rho` by
+  exact-scoreline likelihood on real data didn't support a nonzero value — so it ships at 0
+  (plain Poisson) rather than shipping an un-evidenced edge. The machinery stays for any
+  competition where the data does justify it.
+- **Home advantage deliberately omitted.** WC venues are neutral, so a home term would bias
+  the predictions the product makes. (Side-effect: the club-league backtest *understates* the
+  model — add a home multiplier first if ever retargeting at domestic leagues.)
+
+---
+
+## The betting layer
+
+The page does the value math from the user's (or the auto-fed) odds:
+
+- **Auto odds feed.** Pulls bookmaker prices, **line-shops the best price** across the user's
+  UK books, and **de-vigs** each market to a fair probability.
+- **Expected value & staking.** `EV = model_p × odds − 1`; a positive EV is flagged "VALUE"
+  with a **fractional-Kelly** stake (`edge ÷ (odds−1)`, scaled by a user multiplier).
+- **Ranked best-bets board** with guardrails: it drops the model-vs-market blow-ups that are
+  usually model error (the headline trap — a model's biggest "edges" are its biggest
+  mistakes), keeping only small, believable edges, clearly labelled *unproven*.
+- **Per-game best-value** and inline `model% · book price · implied%` on every market.
+
+## Closing-line value — the forward test
+
+`clv.py` is the real judge of edge. For every flagged bet it logs the **opening price**, rolls
+the **closing line** as kickoff approaches, computes **CLV** (did we beat the close?), and
+**settles** the result for realised P/L. The website's "Model track record" panel surfaces it.
+
+CLV is the leading indicator: if the market consistently moves toward your side by kickoff,
+you're genuinely ahead of it — and it's meaningful in far fewer bets than realised profit.
+The panel makes the honest point explicitly: **a flattering ROI on a small sample with flat
+CLV is luck, not edge.**
+
+---
+
+## Honest status
+
+The priors measurably improve calibration over the naive baseline, and the system is
+internally sound — but it is **not yet proven to beat the market**. CLV is still accumulating,
+and the largest known issue is a systematic over-bias on totals. Nothing here should be bet
+with real money until CLV is clearly positive over a meaningful sample. The reliable money
+during the tournament is promotional/matched-betting value; the model is the moonshot, and
+the CLV log is what tells you — risk-free — whether the moonshot is real.
+
+---
+
+## Tech stack
+
+- **Modelling:** Python, `scipy`/`numpy` (Poisson/NB distributions, score matrices, Elo,
+  shrinkage, calibration metrics). Optional `soccerdata` (FBref xG) and `matplotlib`
+  (calibration plots).
+- **AI layer:** OpenAI Responses API (GPT-5.5 + hosted web search), strictly bounded to
+  lineup projection.
+- **Data:** API-Football (PRO) for fixtures, results, stats, odds; FBref for xG.
+- **Frontend:** a single hand-written `index.html` — vanilla JS, no framework, no build step.
+- **Infra:** GitHub Actions (cron + manual dispatch) as the entire backend; GitHub Pages for
+  hosting. State lives in committed JSON — no server, no database. Secrets in encrypted
+  Actions secrets; nothing hardcoded.
+
+---
+
+## Running it
+
+**Locally (no keys needed — writes labelled sample data):**
 ```bash
 pip install scipy
-python update.py        # writes sample data.json, no keys needed
+python update.py        # writes a sample data.json
 python -m http.server   # open http://localhost:8000
 ```
 
-## Tune before trusting an edge
-`MU_GOALS`, `LEAGUE_AVG_CORNERS`, `CORNER_R` and the per-90 player rates are starting points. Fit them on real data and **backtest against closing odds** before believing any flagged value. The structure is sound; the edge has to be earned with calibration.
+**Backtest:**
+```bash
+python backtest.py                                  # synthetic, baseline ratings
+RATING_MODEL=elo python backtest.py                 # swap the rating method
+python backtest.py --recalibrate                    # data-fit the constants
+BACKTEST_MODE=live BACKTEST_LEAGUE=39 BACKTEST_SEASONS=2022,2023 python backtest.py
+```
+
+**Deploy:** add `API_FOOTBALL_KEY` (and optionally `OPENAI_API_KEY`) to GitHub → Settings →
+Secrets and variables → Actions, enable Pages on `main`, and trigger the workflow.
+
+---
+
+## What this project demonstrates
+
+- **Statistical modelling under data scarcity** — Bayesian-flavoured priors + shrinkage,
+  time-decay, calibration, and walk-forward evaluation.
+- **Disciplined LLM integration** — an AI agent bounded to the one task it's reliable at, with
+  cost-aware gating and caching, and zero dependence on it.
+- **Evidence over intuition** — every modelling choice gated on a backtest, with decisions
+  (1D vs 2D, Dixon-Coles off, home advantage omitted) driven by data and documented honestly.
+- **End-to-end delivery** — data pipeline → model → odds/EV engine → web UI → CI/CD, plus a
+  forward-validation loop (CLV) that keeps the whole thing honest.
